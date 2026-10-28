@@ -1,0 +1,18 @@
+wuji419-bit Source-Available No-Derivatives License 1.0
+
+Copyright (c) 2026 wuji419-bit. All rights reserved except as expressly granted below.
+Canonical repository: https://github.com/wuji419-bit/dsh-model-controls
+
+1. Permission. You may view, download, run, and share exact, unmodified copies of this project's original code and documentation, for lawful purposes, provided that every copy retains this license, copyright notices, the author name "wuji419-bit", and the canonical repository URL. Public redistribution or descriptions accompanying redistributed copies must prominently identify that author and repository. Configuring the unmodified program through its existing settings is allowed.
+
+2. No derivatives. Without prior written permission from the copyright holder, you may not modify, adapt, translate, port, merge, or create derivative works of the covered code or documentation, or distribute modified versions. No trademark rights or endorsement rights are granted. You may not remove attribution or present this project as your own original work.
+
+3. Scope. This license covers only original material the licensor owns or is authorized to license. Third-party software, dependencies, names, and trademarks remain subject to their respective terms. No rights in DeepSeek Harness or other third-party software are granted by this license. Rights that cannot legally be restricted are unaffected.
+
+4. Termination. Permission terminates automatically upon breach. Rights outside this license require separate written permission from wuji419-bit through the canonical repository.
+
+5. Disclaimer. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. TO THE MAXIMUM EXTENT PERMITTED BY LAW, THE AUTHORS AND COPYRIGHT HOLDERS ARE NOT LIABLE FOR CLAIMS, DAMAGES, OR OTHER LIABILITY ARISING FROM THE SOFTWARE OR ITS USE.
+
+This is a source-available license, NOT an OSI-approved open-source license. It does not permit derivative development. GitHub hosting and platform-required viewing/forking rights remain governed by GitHub's applicable terms; a platform fork does not grant permission to modify or redistribute derivatives beyond applicable law or those terms.
+
+中文说明（英文条款为准）：允许查看、下载、运行及原样分享；必须保留 wuji419-bit 署名、完整许可证和原仓库链接。未经书面许可禁止修改、二次开发及发布衍生版本。公开源码不等于标准开源。第三方组件不适用本项目的权利声明。GitHub 公开仓库可能允许平台内 Fork，不能靠本许可证关闭该平台功能。

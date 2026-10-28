@@ -1,0 +1,34 @@
+{
+  "name": "dsh-model-controls",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DSH GPT reasoning and Standard/Fast controls (source available, no derivatives)",
+  "author": "wuji419-bit",
+  "license": "SEE LICENSE IN LICENSE",
+  "repository": { "type": "git", "url": "https://github.com/wuji419-bit/dsh-model-controls.git" },
+  "homepage": "https://github.com/wuji419-bit/dsh-model-controls",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-renderer",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-model-selection",
+        "@deepseek-ai/dsh-api-remotes"
+      ]
+    }
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}
