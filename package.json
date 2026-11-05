@@ -1,11 +1,14 @@
 {
   "name": "dsh-model-controls",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "DSH GPT reasoning and Standard/Fast controls (source available, no derivatives)",
   "author": "wuji419-bit",
   "license": "SEE LICENSE IN LICENSE",
-  "repository": { "type": "git", "url": "https://github.com/wuji419-bit/dsh-model-controls.git" },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wuji419-bit/dsh-model-controls.git"
+  },
   "homepage": "https://github.com/wuji419-bit/dsh-model-controls",
   "type": "module",
   "main": "./index.js",

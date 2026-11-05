@@ -1,50 +1,112 @@
-import {readFileSync,writeFileSync,renameSync,mkdirSync} from 'node:fs';
-import {homedir} from 'node:os';
-import {join} from 'node:path';
-import {buildProfiles,ModelControlsAdapter} from './runtime-v2.js';
-import {hostImport} from './host-import.js';
-const yaml=await hostImport('yaml');
-export const name='model-controls';
-export const inject=['llm','credentials','connection'];
-export function mergedProfiles(source,catalog) {
- const legacy=buildProfiles(source,catalog);const p=legacy.get('model-controls-api');
- const models=p.piProvider.getModels().map(m=>({...m,provider:'sub2api'}));
- return new Map([['sub2api',{...p,displayName:source.displayName??'Configured provider',piProvider:{...p.piProvider,id:'sub2api',name:'Configured provider',getModels:()=>models}}]]);
+import { readFileSync, writeFileSync, renameSync, mkdirSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { canDecorate, decorateOriginal, EMPTY_CATALOG, modelControls } from './provider-controls.js';
+export { decorateOriginal } from './provider-controls.js';
+export const name = 'model-controls';
+export const inject = ['llm', 'connection'];
+
+export function createCatalogLoader(path, warn = () => {}) {
+  let previous, catalog, missing = false;
+  return () => {
+    let raw;
+    try { raw = readFileSync(path, 'utf8'); }
+    catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+      if (!missing) warn('Model capability catalog is missing; keeping original model capabilities and disabling undeclared Fast mode.');
+      missing = true;
+      return EMPTY_CATALOG;
+    }
+    missing = false;
+    if (raw !== previous) {
+      const next = JSON.parse(raw);
+      if (!Array.isArray(next.models)) throw new Error('catalog has no models array');
+      catalog = next; previous = raw;
+    }
+    return catalog;
+  };
 }
-export class MergedAdapter extends ModelControlsAdapter {
- constructor(config,speed){super(config);this.speed=speed;}
- streamWithSnapshot(options,snapshot){
-  const fast=!!this.speed(options.sessionId,options.model);
-  const profiles=new Map(snapshot.profiles);profiles.set('sub2api',{...profiles.get('sub2api'),fast});
-  return super.streamWithSnapshot(options,{...snapshot,profiles});
- }
-}
-// This version-pinned decorator touches only the original adapter's sub2api GPT
-// calls. All original models, registration ownership, credentials and endpoints
-// remain with llm-pi-ai. Disposal restores exactly the previous methods.
-export function decorateOriginal(original,enhanced){
- const saved=new Map();const patches={
-  modelInfo(snapshot,provider,model){if(provider==='sub2api' && enhanced.current().profiles.get('sub2api').entries.has(model))return enhanced.modelInfo(enhanced.current(),provider,model);return saved.get('modelInfo').call(this,snapshot,provider,model);},
-  prepareCall(provider,model,signal){if(provider==='sub2api' && enhanced.current().profiles.get('sub2api').entries.has(model))return enhanced.prepareCall(provider,model,signal);return saved.get('prepareCall').call(this,provider,model,signal);},
-  streamWithSnapshot(options,snapshot){if(options.provider==='sub2api' && enhanced.current().profiles.get('sub2api').entries.has(options.model))return enhanced.stream(options);return saved.get('streamWithSnapshot').call(this,options,snapshot);}
- };
- for(const [key,value] of Object.entries(patches)){if(typeof original[key]!=='function')throw new Error('Unsupported DSH adapter contract: '+key);saved.set(key,original[key]);original[key]=value;}
- return ()=>{for(const [key,value]of saved)if(original[key]===patches[key])original[key]=value;};
-}
-export function apply(ctx){
- const home=process.env.DSH_HOME||join(homedir(),'.dsh');const profilePath=join(home,'profiles/desktop/cordis.patch.yml');const catalogPath=join(homedir(),'.codex/cc-switch-model-catalog.json');
- const speedPath=join(home,'plugins/model-controls/session-speed.json');
- let speed={};try{speed=JSON.parse(readFileSync(speedPath,'utf8'));}catch(e){if(e.code!=='ENOENT')throw e;}
- let fingerprint,profiles;
- const load=()=>{const raw=readFileSync(profilePath,'utf8'),cat=readFileSync(catalogPath,'utf8');if(fingerprint!==raw+'\0'+cat){const source=yaml.parse(raw).find(e=>e.id==='llm-pi-ai')?.config?.providers?.sub2api;const next=mergedProfiles(source,JSON.parse(cat));profiles=next;fingerprint=raw+'\0'+cat;}return profiles;};
- const fast=(sessionId,model)=>speed[String(sessionId)]===true && load().get('sub2api').entries.get(model)?.fast===true;
- const enhanced=new MergedAdapter({profiles:load,resolveApiKey:async(_p,p)=>{const hit=await ctx.credentials.resolve(p.apiKeyEnv);if(!hit?.value)throw new Error('Original Configured provider API credential unavailable');return hit.value;},resolveAttachments:()=>ctx.get('attachments'),resolveImageAccess:async(...args)=>{const llm=await hostImport('@deepseek-ai/dsh-llm');return llm.resolveImageAttachmentAccess(args[0],path=>ctx.get('fs')?.processPathFromHostPath(path),args[1]);}},fast);
- let attached,restore;
- const attach=()=>{const original=ctx.llm.adapters?.get('sub2api')?.adapter;if(!original)throw new Error('Original Configured provider adapter not registered');if(original===attached)return;restore?.();restore=decorateOriginal(original,enhanced);attached=original;};
- attach();ctx.effect(()=>()=>restore?.());ctx.on('llm/adapters-updated',()=>attach());
- for(const op of ['get','set'])ctx.connection.fetch.register({path:'/api/model-speed.'+op,methods:['POST'],requestBody:'buffered',fetch:async request=>{
-  let envelope;try{envelope=await request.json();if(envelope.type!=='client-request'||envelope.method!=='model-speed.'+op||typeof envelope.rpcId!=='string')throw new Error('Invalid request envelope');const p=envelope.payload?.args??envelope.payload;if(typeof p.sessionId!=='string'||p.sessionId.length>256||!p.sessionId)throw new Error('Invalid session');const entry=load().get('sub2api').entries.get(p.model);if(!entry?.fast)throw new Error('Current Configured provider model does not advertise Fast');if(op==='set'){if(typeof p.fast!=='boolean')throw new Error('Invalid fast choice');const next={...speed};if(p.fast)next[p.sessionId]=true;else delete next[p.sessionId];mkdirSync(join(home,'plugins/model-controls'),{recursive:true});writeFileSync(speedPath+'.tmp',JSON.stringify(next),{mode:0o600});renameSync(speedPath+'.tmp',speedPath);speed=next;}return Response.json({type:'server-response',rpcId:envelope.rpcId,result:{ok:true,value:{fast:fast(p.sessionId,p.model)}}});}
-  catch(e){return Response.json({type:'server-response',rpcId:envelope?.rpcId??'invalid-request',result:{ok:false,error:{code:'model-speed/error',message:e.message}}});}
- }});
- ctx.llm.emitAdaptersUpdated();
+
+const speedKey = (sessionId, provider, model) => JSON.stringify([sessionId, provider, model]);
+export function apply(ctx, { catalogPath = join(homedir(), '.codex/cc-switch-model-catalog.json'),
+  speedPath = join(process.env.DSH_HOME || join(homedir(), '.dsh'), 'plugins/model-controls/session-speed.json') } = {}) {
+  const catalog = createCatalogLoader(catalogPath, message => ctx.logger?.warn?.(message));
+  let choices = new Map();
+  try {
+    const stored = JSON.parse(readFileSync(speedPath, 'utf8'));
+    // Legacy booleans do not identify a provider. Never silently enable a paid
+    // tier on an arbitrary newly discovered service while migrating them.
+    if (stored.version === 2 && stored.choices && typeof stored.choices === 'object' && !Array.isArray(stored.choices)) {
+      choices = new Map(Object.entries(stored.choices).filter(([, fast]) => fast === true));
+    }
+  } catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const speed = (sessionId, provider, model) => choices.get(speedKey(sessionId, provider, model)) === true;
+  const attached = new Map();
+  let disposed = false;
+  const attach = () => {
+    if (disposed) return;
+    // One adapter may own several provider IDs. Patch its object once, not once
+    // per name, and restore it when it is removed/replaced or the plugin stops.
+    const active = new Set([...ctx.llm.adapters.values()].map(record => record.adapter).filter(canDecorate));
+    for (const [adapter, restore] of attached) {
+      if (!active.has(adapter)) { restore(); attached.delete(adapter); }
+    }
+    for (const adapter of active) {
+      if (!attached.has(adapter)) attached.set(adapter, decorateOriginal(adapter, { catalog, speed }));
+    }
+  };
+  attach();
+  ctx.on('llm/adapters-updated', attach);
+  ctx.effect(() => () => {
+    disposed = true;
+    for (const restore of attached.values()) restore();
+    attached.clear();
+  });
+
+  function selection(provider, model) {
+    const adapter = ctx.llm.adapters.get(provider)?.adapter;
+    if (!attached.has(adapter)) return undefined;
+    return modelControls(adapter.current(), provider, model, catalog());
+  }
+  const result = (sessionId, provider, model, control) => ({
+    supported: !!control,
+    fastAvailable: control?.capability?.fast === true,
+    fast: control?.capability?.fast === true && speed(sessionId, provider, model),
+  });
+  for (const op of ['get', 'set']) ctx.connection.fetch.register({
+    path: '/api/model-speed.' + op, methods: ['POST'], requestBody: 'buffered',
+    fetch: async request => {
+      let envelope;
+      try {
+        envelope = await request.json();
+        if (envelope?.type !== 'client-request' || envelope.method !== 'model-speed.' + op || typeof envelope.rpcId !== 'string') {
+          throw new Error('Invalid request envelope');
+        }
+        const args = envelope.payload?.args ?? envelope.payload;
+        for (const key of ['sessionId', 'provider', 'model']) {
+          if (typeof args?.[key] !== 'string' || !args[key] || args[key].length > 512) throw new Error('Invalid ' + key);
+        }
+        const { sessionId, provider, model } = args;
+        const control = selection(provider, model);
+        if (op === 'set') {
+          if (typeof args.fast !== 'boolean') throw new Error('Invalid fast choice');
+          if (!control) throw new Error('Current model does not support GPT model controls');
+          if (args.fast && !control.capability?.fast) throw new Error('Current model does not advertise Fast');
+          const next = new Map(choices);
+          const key = speedKey(sessionId, provider, model);
+          if (args.fast) next.set(key, true); else next.delete(key);
+          mkdirSync(dirname(speedPath), { recursive: true });
+          writeFileSync(speedPath + '.tmp', JSON.stringify({ version: 2, choices: Object.fromEntries(next) }), { mode: 0o600 });
+          renameSync(speedPath + '.tmp', speedPath);
+          choices = next;
+        }
+        return Response.json({ type: 'server-response', rpcId: envelope.rpcId,
+          result: { ok: true, value: result(sessionId, provider, model, control) } });
+      } catch (error) {
+        return Response.json({ type: 'server-response', rpcId: envelope?.rpcId ?? 'invalid-request',
+          result: { ok: false, error: { code: 'model-speed/error', message: error.message } } });
+      }
+    },
+  });
+  ctx.llm.emitAdaptersUpdated();
 }

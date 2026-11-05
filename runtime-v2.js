@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { hostImport } from './host-import.js';
-import { capabilities, ROUTES, NATIVE_LEVELS, validateSelection, transformPayload } from './catalog.js';
+import { capabilities, isGptChatModel, ROUTES, NATIVE_LEVELS, validateSelection, transformPayload } from './catalog.js';
 const [{ PiAiAdapter }, llm, responses, yaml] = await Promise.all([
   hostImport('@deepseek-ai/dsh-llm-pi-ai'), hostImport('@deepseek-ai/dsh-llm'),
   hostImport('@earendil-works/pi-ai/api/openai-responses'), hostImport('yaml')
@@ -10,14 +10,14 @@ const [{ PiAiAdapter }, llm, responses, yaml] = await Promise.all([
 export const name = 'model-controls';
 export const inject = ['llm', 'credentials'];
 const ZERO_COST = {input:0,output:0,cacheRead:0,cacheWrite:0};
-// Profiles are isolated: never replace sub2api, mutate the host adapter, or copy keys.
-export function buildProfiles(source, catalog) {
+// Legacy standalone routes are isolated from all original host provider IDs.
+export function buildProfiles(source, catalog, routes = ROUTES) {
   if (source.api !== 'openai-responses') throw new Error('enhanced routes require openai-responses');
   const url = new URL(source.baseURL);
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['127.0.0.1','localhost','[::1]'].includes(url.hostname))) throw new Error('endpoint must use HTTPS (except localhost tests)');
   const entries = capabilities(catalog, source);
   const profiles = new Map();
-  for (const route of ROUTES) {
+  for (const route of routes) {
     const fast = route.endsWith('-fast');
     const selected = entries.filter(e => !fast || e.fast);
     if (!selected.length) continue;
@@ -76,9 +76,20 @@ export function createProfileLoader(profilePath, catalogPath) {
     const fingerprint = rawProfile + '\0' + rawCatalog;
     if (fingerprint === previous) return profiles;
     const patch = yaml.parse(rawProfile);
-    const source = patch.find(e => e.id === 'llm-pi-ai')?.config?.providers?.sub2api;
-    if (!source) throw new Error('source provider sub2api is missing');
-    const next = buildProfiles(source, JSON.parse(rawCatalog));
+    const catalog = JSON.parse(rawCatalog);
+    const next = new Map();
+    for (const plugin of patch) {
+      if (plugin.id !== 'llm-pi-ai' && plugin.name !== '@deepseek-ai/dsh-llm-pi-ai') continue;
+      for (const [provider, source] of Object.entries(plugin.config?.providers ?? {})) {
+        if (source.api !== 'openai-responses' || !source.models?.some(model =>
+          isGptChatModel(model.id) && catalog.models.some(entry => entry.slug?.toLowerCase() === model.id.toLowerCase()))) continue;
+        const routes = ROUTES.map(route => encodeURIComponent(provider) + ':' + route);
+        for (const [route, profile] of buildProfiles(source, catalog, routes)) {
+          if (next.has(route)) throw new Error('Duplicate configured provider: ' + provider);
+          next.set(route, profile);
+        }
+      }
+    }
     previous = fingerprint;
     profiles = next;
     return profiles;

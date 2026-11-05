@@ -3,11 +3,17 @@ import { pathToFileURL } from 'node:url';
 import { join, dirname } from 'node:path';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-// Prefer the loader's host packages; the Desktop ASAR fallback avoids installing
-// a second copy of the LLM service and its branded types in this local plugin.
-export async function hostImport(id) {
+// Prefer the loader's host packages. Resolve fallbacks within the running
+// Electron app, not a different installed edition: official builds keep their
+// host in app.asar/dsh, while DSH Desktop 2.x uses an unpacked app directory.
+// Reuse those packages instead of installing duplicate services/branded types.
+export async function hostImport(id, { resourcesPath = process.resourcesPath } = {}) {
   const roots = [import.meta.url];
-  if (process.resourcesPath) roots.push(join(process.resourcesPath, 'app.asar/dsh/package.json'));
+  if (resourcesPath) roots.push(
+    join(resourcesPath, 'app/package.json'),
+    join(resourcesPath, 'app.asar/dsh/package.json'),
+    join(resourcesPath, 'app.asar/package.json'),
+  );
   roots.push('/Applications/DeepSeek Harness.app/Contents/Resources/app.asar/dsh/package.json');
   let last;
   for (const root of roots) {

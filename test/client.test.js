@@ -14,7 +14,7 @@ const ok = value => ({ result: { ok: true, value } });
 
 // Only the hooks used by the client are simulated; effects run after render,
 // preserve their dependencies, and clean up on dependency changes/unmount.
-function setup({ current = { provider: 'sub2api', model: 'gpt-6.1-high' },
+function setup({ current = { provider: 'my-gpt-api', model: 'gpt-6.1-high' },
   respond = () => ok({ fast: false }), load = async () => {}, child = false } = {}) {
   let cursor = 0, tree, props, component, dirty = false, uuid = 0;
   const states = [], effects = [], pending = [], requests = [], slots = [];
@@ -113,7 +113,7 @@ function assertRpc(request, operation, fast) {
   assert.deepEqual(request.headers, { 'content-type': 'application/json' });
   assert.deepEqual(request.body, {
     type: 'client-request', rpcId: request.body.rpcId, method: 'model-speed.' + operation,
-    payload: { args: { sessionId: 'session-1', model: 'gpt-6.1-high',
+    payload: { args: { sessionId: 'session-1', provider: 'my-gpt-api', model: 'gpt-6.1-high',
       ...(fast === undefined ? {} : { fast }) } },
   });
   assert.match(request.body.rpcId, /^test-rpc-\d+$/);
@@ -156,7 +156,7 @@ test('initial fast state is displayed from the RPC response', async () => {
 });
 
 test('standard/fast toggles use speed RPCs without changing model or reasoning tier', async () => {
-  const current = Object.freeze({ provider: 'sub2api', model: 'gpt-6.1-high', reasoningEffort: 'high' });
+  const current = Object.freeze({ provider: 'my-gpt-api', model: 'gpt-6.1-high', reasoningEffort: 'high' });
   const app = setup({ current, respond: request => ok({ fast: request.body.payload.args.fast ?? false }) });
   app.render(); await app.settle();
   await app.button().props.onClick(); await app.settle();
@@ -168,7 +168,7 @@ test('standard/fast toggles use speed RPCs without changing model or reasoning t
   assert.equal(app.requests.length, 3);
   assertRpc(app.requests[0], 'get'); assertRpc(app.requests[1], 'set', true); assertRpc(app.requests[2], 'set', false);
   assert.equal(new Set(app.requests.map(request => request.body.rpcId)).size, 3);
-  assert.deepEqual(current, { provider: 'sub2api', model: 'gpt-6.1-high', reasoningEffort: 'high' });
+  assert.deepEqual(current, { provider: 'my-gpt-api', model: 'gpt-6.1-high', reasoningEffort: 'high' });
 });
 
 test('pending toggle shows busy state and prevents additional requests', async () => {
@@ -222,12 +222,12 @@ test('directory load errors are shown', async () => {
 });
 
 for (const [name, current] of [
-  ['unsupported provider', { provider: 'openai', model: 'gpt-6.1-high' }],
-  ['unsupported model', { provider: 'sub2api', model: 'claude-sonnet' }],
-  ['image model', { provider: 'sub2api', model: 'gpt-image-1' }],
-  ['case-insensitive image model', { provider: 'sub2api', model: 'GPT-IMAGE-2' }],
+  ['missing provider', { model: 'gpt-6.1-high' }],
+  ['unsupported model', { provider: 'my-gpt-api', model: 'claude-sonnet' }],
+  ['image model', { provider: 'my-gpt-api', model: 'gpt-image-1' }],
+  ['case-insensitive image model', { provider: 'my-gpt-api', model: 'GPT-IMAGE-2' }],
   ['missing current selection', undefined],
-  ['missing model', { provider: 'sub2api' }],
+  ['missing model', { provider: 'my-gpt-api' }],
 ]) {
   test(name + ' hides controls and makes no speed RPC', async () => {
     // Explicitly replace the default selection for the undefined case.
@@ -251,14 +251,85 @@ test('subsessions hide the Seat without loading a directory or issuing RPCs', as
   assert.equal(app.requests.length, 0);
 });
 
-test('stale initial response is ignored after switching to an unsupported provider', async () => {
+test('stale initial response is ignored after switching to a non-GPT model', async () => {
   const reply = deferred();
   const app = setup({ respond: () => reply.promise });
   app.render();
-  app.changeCurrent({ provider: 'openai', model: 'gpt-6.1-high' });
+  app.changeCurrent({ provider: 'another-api', model: 'claude-sonnet' });
   reply.resolve(ok({ fast: true }));
   await app.settle();
   assert.equal(app.tree, null);
   assert.equal(app.requests.length, 1);
   app.unmount();
+});
+
+for (const provider of ['openai', 'sub2api', '随便起的服务名', 'my-api/v2:production']) {
+  test('GPT controls follow the model under provider ' + provider, async () => {
+    const app = setup({ current: { provider, model: 'gpt-6.1-high' } });
+    app.render(); await app.settle();
+    assert.equal(app.button().props.disabled, false);
+    await app.button().props.onClick(); await app.settle();
+    assert.deepEqual(app.requests.map(request => request.body.payload.args.provider), [provider, provider]);
+  });
+}
+
+test('changing only the provider reloads speed for the same GPT model', async () => {
+  const app = setup({ respond: request => ok({ fast: request.body.payload.args.provider === 'another-api' }) });
+  app.render(); await app.settle();
+  app.changeCurrent({ provider: 'another-api', model: 'gpt-6.1-high' });
+  assert.equal(app.button().props.disabled, true);
+  await app.settle();
+  assert.equal(app.requests.length, 2);
+  assert.equal(app.requests[1].body.payload.args.provider, 'another-api');
+  assert.equal(app.button().props['aria-pressed'], true);
+});
+
+test('stale get from a previous provider cannot overwrite the new provider speed', async () => {
+  const reply = deferred();
+  const app = setup({ respond: (_request, count) => count === 1 ? reply.promise : ok({ fast: true }) });
+  app.render();
+  app.changeCurrent({ provider: 'another-api', model: 'gpt-6.1-high' });
+  await app.settle();
+  reply.resolve(ok({ fast: false })); await app.settle();
+  assert.equal(app.requests.length, 2);
+  assert.equal(app.button().props['aria-pressed'], true);
+});
+
+test('stale toggle does not change speed or busy state after a provider switch', async () => {
+  const reply = deferred();
+  const app = setup({ respond: (_request, count) => count === 2 ? reply.promise : ok({ fast: false }) });
+  app.render(); await app.settle();
+  const switching = app.button().props.onClick(); app.render();
+  app.changeCurrent({ provider: 'another-api', model: 'gpt-6.1-high' }); await app.settle();
+  reply.resolve(ok({ fast: true })); await switching; await app.settle();
+  assert.equal(app.button().props['aria-pressed'], false);
+  assert.equal(app.button().props.disabled, false);
+  assert.equal(app.requests[1].body.payload.args.provider, 'my-gpt-api');
+});
+
+test('two clicks before React rerenders issue only one speed update', async () => {
+  const reply = deferred();
+  const app = setup({ respond: (_request, count) => count === 2 ? reply.promise : ok({ fast: false }) });
+  app.render(); await app.settle();
+  const switching = app.button().props.onClick();
+  await app.button().props.onClick();
+  assert.equal(app.requests.length, 2);
+  reply.resolve(ok({ fast: true })); await switching; await app.settle();
+});
+
+test('GPT models without declared Priority stay standard without an error alert', async () => {
+  const app = setup({ respond: () => ok({ supported: true, fastAvailable: false, fast: false }) });
+  app.render(); await app.settle();
+  assert.equal(app.button().children[0], '⚡ 标准');
+  assert.equal(app.button().props.disabled, true);
+  assert.equal(app.alert(), null);
+  await app.button().props.onClick();
+  assert.equal(app.requests.length, 1);
+});
+
+test('unsupported host adapters or protocols hide the control after capability resolution', async () => {
+  const app = setup({ respond: () => ok({ supported: false, fastAvailable: false, fast: false }) });
+  app.render(); await app.settle();
+  assert.equal(app.tree, null);
+  assert.equal(app.requests.length, 1);
 });
